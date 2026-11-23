@@ -1,16 +1,159 @@
 import os
+import sys
+from pathlib import Path
+
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.analytics import (
-    compute_kpis,
-    get_cost_breakdown,
-    get_department_summary,
-    load_data,
-    simulate_budget_scenario,
-)
+# Ensure repository root and nested project folder are on sys.path
+ROOT_DIR = Path(__file__).resolve().parent
+for candidate in (ROOT_DIR, ROOT_DIR / "hr_cost_analysis"):
+    if candidate.exists() and str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
+
+try:
+    from src.analytics import (
+        compute_kpis,
+        get_cost_breakdown,
+        get_department_summary,
+        load_data,
+        simulate_budget_scenario,
+    )
+except ModuleNotFoundError:
+    def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
+        cost_cols = [
+            "Base_Salary",
+            "Benefits_Cost",
+            "Performance_Bonus",
+            "Overtime_Cost",
+            "Training_Cost",
+            "Recruitment_Cost",
+            "Turnover_Cost",
+        ]
+        df["Total_HR_Cost"] = df[cost_cols].sum(axis=1)
+        df["Overhead_Cost"] = (
+            df["Benefits_Cost"]
+            + df["Overtime_Cost"]
+            + df["Training_Cost"]
+            + df["Recruitment_Cost"]
+            + df["Turnover_Cost"]
+        )
+        df["Overhead_Ratio_Pct"] = np.where(
+            df["Total_HR_Cost"] > 0,
+            (df["Overhead_Cost"] / df["Total_HR_Cost"]) * 100,
+            0.0,
+        )
+        return df
+
+    def load_data(filepath: str) -> pd.DataFrame:
+        return _prepare_df(pd.read_csv(filepath))
+
+    def compute_kpis(df: pd.DataFrame) -> dict:
+        total_cost = float(df["Total_HR_Cost"].sum())
+        headcount = int(len(df))
+        active_headcount = int((df["Attrition_Status"] == "Active").sum())
+        left_headcount = int((df["Attrition_Status"] == "Left").sum())
+        cost_per_employee = total_cost / headcount if headcount > 0 else 0.0
+        total_salary = float(df["Base_Salary"].sum())
+        total_benefits = float(df["Benefits_Cost"].sum())
+        total_turnover = float(df["Turnover_Cost"].sum())
+        total_overtime = float(df["Overtime_Cost"].sum())
+        attrition_rate = (left_headcount / headcount * 100) if headcount > 0 else 0.0
+        overhead_pct = (
+            ((total_cost - total_salary - float(df["Performance_Bonus"].sum())) / total_cost * 100)
+            if total_cost > 0
+            else 0.0
+        )
+        return {
+            "total_cost": total_cost,
+            "headcount": headcount,
+            "active_headcount": active_headcount,
+            "cost_per_employee": cost_per_employee,
+            "total_salary": total_salary,
+            "total_benefits": total_benefits,
+            "total_turnover": total_turnover,
+            "total_overtime": total_overtime,
+            "attrition_rate": attrition_rate,
+            "overhead_pct": overhead_pct,
+        }
+
+    def get_department_summary(df: pd.DataFrame) -> pd.DataFrame:
+        summary = (
+            df.groupby("Department", as_index=False)
+            .agg(
+                Headcount=("Employee_ID", "count"),
+                Base_Salary=("Base_Salary", "sum"),
+                Benefits_Cost=("Benefits_Cost", "sum"),
+                Performance_Bonus=("Performance_Bonus", "sum"),
+                Overtime_Cost=("Overtime_Cost", "sum"),
+                Training_Cost=("Training_Cost", "sum"),
+                Recruitment_Cost=("Recruitment_Cost", "sum"),
+                Turnover_Cost=("Turnover_Cost", "sum"),
+                Total_HR_Cost=("Total_HR_Cost", "sum"),
+                Avg_Cost_Per_Employee=("Total_HR_Cost", "mean"),
+            )
+            .sort_values(by="Total_HR_Cost", ascending=False)
+        )
+        summary["Cost_Share_Pct"] = (
+            summary["Total_HR_Cost"] / summary["Total_HR_Cost"].sum() * 100
+        ).round(2)
+        return summary
+
+    def get_cost_breakdown(df: pd.DataFrame) -> pd.DataFrame:
+        categories = [
+            ("Base Salary", df["Base_Salary"].sum()),
+            ("Benefits", df["Benefits_Cost"].sum()),
+            ("Performance Bonus", df["Performance_Bonus"].sum()),
+            ("Turnover & Attrition", df["Turnover_Cost"].sum()),
+            ("Overtime", df["Overtime_Cost"].sum()),
+            ("Training & Upskilling", df["Training_Cost"].sum()),
+            ("Recruitment", df["Recruitment_Cost"].sum()),
+        ]
+        breakdown_df = pd.DataFrame(categories, columns=["Cost_Category", "Amount"])
+        breakdown_df["Share_Pct"] = (
+            breakdown_df["Amount"] / breakdown_df["Amount"].sum() * 100
+        ).round(2)
+        return breakdown_df.sort_values(by="Amount", ascending=False)
+
+    def simulate_budget_scenario(
+        df: pd.DataFrame,
+        salary_hike_pct: float = 0.0,
+        attrition_reduction_pct: float = 0.0,
+        overtime_reduction_pct: float = 0.0,
+        training_boost_pct: float = 0.0,
+    ) -> dict:
+        baseline_total = float(df["Total_HR_Cost"].sum())
+        sim_salary = df["Base_Salary"] * (1 + salary_hike_pct / 100.0)
+        sim_benefits = df["Benefits_Cost"] * (1 + salary_hike_pct / 100.0)
+        sim_bonus = df["Performance_Bonus"] * (1 + salary_hike_pct / 100.0)
+        sim_turnover = df["Turnover_Cost"] * (1 - attrition_reduction_pct / 100.0)
+        sim_overtime = df["Overtime_Cost"] * (1 - overtime_reduction_pct / 100.0)
+        sim_training = df["Training_Cost"] * (1 + training_boost_pct / 100.0)
+        sim_recruitment = df["Recruitment_Cost"] * (1 - attrition_reduction_pct / 100.0)
+
+        projected_total = float(
+            (
+                sim_salary
+                + sim_benefits
+                + sim_bonus
+                + sim_turnover
+                + sim_overtime
+                + sim_training
+                + sim_recruitment
+            ).sum()
+        )
+        net_delta = projected_total - baseline_total
+        delta_pct = (net_delta / baseline_total * 100) if baseline_total > 0 else 0.0
+        return {
+            "baseline_total": baseline_total,
+            "projected_total": projected_total,
+            "net_delta": net_delta,
+            "delta_pct": delta_pct,
+        }
+
 
 st.set_page_config(
     page_title="HR Cost Analysis & Workforce Budgeting",
@@ -44,12 +187,24 @@ def format_inr(value: float) -> str:
     return f"₹{value:,.0f}"
 
 
+def resolve_data_path() -> Path:
+    """Locate hr_cost_data.csv whether stored at root or inside hr_cost_analysis/."""
+    candidates = [
+        ROOT_DIR / "data" / "hr_cost_data.csv",
+        ROOT_DIR / "hr_cost_analysis" / "data" / "hr_cost_data.csv",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    raise FileNotFoundError(
+        "Could not find 'data/hr_cost_data.csv'. Ensure the 'data' folder is pushed to GitHub."
+    )
+
+
 @st.cache_data
-def get_cached_data(path: str) -> pd.DataFrame:
-    return load_data(path)
+def get_cached_data(path_str: str) -> pd.DataFrame:
+    return load_data(path_str)
 
-
-DATA_PATH = os.path.join("data", "hr_cost_data.csv")
 
 # Sidebar - Data Upload & Filters
 st.sidebar.title("HR Cost Controls")
@@ -59,11 +214,19 @@ uploaded_file = st.sidebar.file_uploader(
 
 if uploaded_file is not None:
     raw_df = pd.read_csv(uploaded_file)
-    temp_path = os.path.join("data", "_uploaded_temp.csv")
-    raw_df.to_csv(temp_path, index=False)
-    df = load_data(temp_path)
+    cost_cols = [
+        "Base_Salary",
+        "Benefits_Cost",
+        "Performance_Bonus",
+        "Overtime_Cost",
+        "Training_Cost",
+        "Recruitment_Cost",
+        "Turnover_Cost",
+    ]
+    raw_df["Total_HR_Cost"] = raw_df[cost_cols].sum(axis=1)
+    df = raw_df
 else:
-    df = get_cached_data(DATA_PATH)
+    df = get_cached_data(str(resolve_data_path()))
 
 st.sidebar.subheader("Workforce Filters")
 selected_depts = st.sidebar.multiselect(
