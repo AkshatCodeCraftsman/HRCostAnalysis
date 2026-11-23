@@ -187,8 +187,142 @@ def format_inr(value: float) -> str:
     return f"₹{value:,.0f}"
 
 
-def resolve_data_path() -> Path:
-    """Locate hr_cost_data.csv whether stored at root or inside hr_cost_analysis/."""
+def generate_default_dataset(n_employees: int = 250, seed: int = 42) -> pd.DataFrame:
+    """Fallback synthetic dataset generator if data/hr_cost_data.csv is not on disk."""
+    rng = np.random.default_rng(seed)
+    departments = [
+        "Engineering",
+        "Data & AI",
+        "Sales",
+        "Marketing",
+        "Human Resources",
+        "Operations",
+        "Finance",
+    ]
+    dept_weights = [0.30, 0.15, 0.20, 0.10, 0.05, 0.12, 0.08]
+    levels = ["Junior", "Mid-Level", "Senior", "Lead", "Manager"]
+    level_weights = [0.25, 0.35, 0.22, 0.10, 0.08]
+    locations = ["Bengaluru", "Noida", "Hyderabad", "Pune", "Remote"]
+    loc_weights = [0.35, 0.25, 0.15, 0.15, 0.10]
+    emp_types = ["Full-Time", "Contract"]
+    emp_type_weights = [0.85, 0.15]
+
+    base_salary_map = {
+        ("Engineering", "Junior"): 750000,
+        ("Engineering", "Mid-Level"): 1400000,
+        ("Engineering", "Senior"): 2400000,
+        ("Engineering", "Lead"): 3200000,
+        ("Engineering", "Manager"): 3800000,
+        ("Data & AI", "Junior"): 850000,
+        ("Data & AI", "Mid-Level"): 1600000,
+        ("Data & AI", "Senior"): 2700000,
+        ("Data & AI", "Lead"): 3500000,
+        ("Data & AI", "Manager"): 4200000,
+        ("Sales", "Junior"): 550000,
+        ("Sales", "Mid-Level"): 1050000,
+        ("Sales", "Senior"): 1800000,
+        ("Sales", "Lead"): 2500000,
+        ("Sales", "Manager"): 3100000,
+        ("Marketing", "Junior"): 500000,
+        ("Marketing", "Mid-Level"): 950000,
+        ("Marketing", "Senior"): 1600000,
+        ("Marketing", "Lead"): 2200000,
+        ("Marketing", "Manager"): 2800000,
+        ("Human Resources", "Junior"): 480000,
+        ("Human Resources", "Mid-Level"): 880000,
+        ("Human Resources", "Senior"): 1500000,
+        ("Human Resources", "Lead"): 2000000,
+        ("Human Resources", "Manager"): 2500000,
+        ("Operations", "Junior"): 450000,
+        ("Operations", "Mid-Level"): 850000,
+        ("Operations", "Senior"): 1450000,
+        ("Operations", "Lead"): 1950000,
+        ("Operations", "Manager"): 2450000,
+        ("Finance", "Junior"): 600000,
+        ("Finance", "Mid-Level"): 1100000,
+        ("Finance", "Senior"): 1850000,
+        ("Finance", "Lead"): 2450000,
+        ("Finance", "Manager"): 3000000,
+    }
+
+    dept_list = rng.choice(departments, n_employees, p=dept_weights)
+    level_list = rng.choice(levels, n_employees, p=level_weights)
+    loc_list = rng.choice(locations, n_employees, p=loc_weights)
+    type_list = rng.choice(emp_types, n_employees, p=emp_type_weights)
+
+    records = []
+    for i in range(n_employees):
+        dept, lvl, loc, etype = dept_list[i], level_list[i], loc_list[i], type_list[i]
+        base = round(base_salary_map[(dept, lvl)] * rng.uniform(0.90, 1.15), -3)
+        benefits = round(base * (rng.uniform(0.12, 0.16) if etype == "Full-Time" else 0.03), -2)
+        bonus = round(
+            base * (rng.uniform(0.05, 0.18) if etype == "Full-Time" else rng.uniform(0.0, 0.05)),
+            -2,
+        )
+        overtime = round(
+            rng.uniform(15000, 85000)
+            if lvl in ["Junior", "Mid-Level"] and rng.random() < 0.45
+            else 0,
+            -2,
+        )
+        training = round(
+            rng.uniform(15000, 65000)
+            if dept in ["Data & AI", "Engineering"]
+            else rng.uniform(8000, 35000),
+            -2,
+        )
+        tenure_years = round(float(rng.uniform(0.2, 6.5)), 1)
+        recruitment_cost = round(base * rng.uniform(0.08, 0.14) if tenure_years <= 1.0 else 0, -2)
+        attrition_status = "Left" if rng.random() < 0.14 else "Active"
+        turnover_cost = round(base * 0.35, -2) if attrition_status == "Left" else 0
+
+        records.append(
+            {
+                "Employee_ID": f"EMP-{1001 + i}",
+                "Department": dept,
+                "Role_Level": lvl,
+                "Location": loc,
+                "Employment_Type": etype,
+                "Tenure_Years": tenure_years,
+                "Attrition_Status": attrition_status,
+                "Base_Salary": base,
+                "Benefits_Cost": benefits,
+                "Performance_Bonus": bonus,
+                "Overtime_Cost": overtime,
+                "Training_Cost": training,
+                "Recruitment_Cost": recruitment_cost,
+                "Turnover_Cost": turnover_cost,
+            }
+        )
+
+    df = pd.DataFrame(records)
+    cost_cols = [
+        "Base_Salary",
+        "Benefits_Cost",
+        "Performance_Bonus",
+        "Overtime_Cost",
+        "Training_Cost",
+        "Recruitment_Cost",
+        "Turnover_Cost",
+    ]
+    df["Total_HR_Cost"] = df[cost_cols].sum(axis=1)
+    df["Overhead_Cost"] = (
+        df["Benefits_Cost"]
+        + df["Overtime_Cost"]
+        + df["Training_Cost"]
+        + df["Recruitment_Cost"]
+        + df["Turnover_Cost"]
+    )
+    df["Overhead_Ratio_Pct"] = np.where(
+        df["Total_HR_Cost"] > 0,
+        (df["Overhead_Cost"] / df["Total_HR_Cost"]) * 100,
+        0.0,
+    )
+    return df
+
+
+def resolve_data_path():
+    """Locate hr_cost_data.csv if present on disk, otherwise return None."""
     candidates = [
         ROOT_DIR / "data" / "hr_cost_data.csv",
         ROOT_DIR / "hr_cost_analysis" / "data" / "hr_cost_data.csv",
@@ -196,14 +330,14 @@ def resolve_data_path() -> Path:
     for path in candidates:
         if path.exists():
             return path
-    raise FileNotFoundError(
-        "Could not find 'data/hr_cost_data.csv'. Ensure the 'data' folder is pushed to GitHub."
-    )
+    return None
 
 
 @st.cache_data
 def get_cached_data(path_str: str) -> pd.DataFrame:
-    return load_data(path_str)
+    if path_str:
+        return load_data(path_str)
+    return generate_default_dataset()
 
 
 # Sidebar - Data Upload & Filters
@@ -226,7 +360,8 @@ if uploaded_file is not None:
     raw_df["Total_HR_Cost"] = raw_df[cost_cols].sum(axis=1)
     df = raw_df
 else:
-    df = get_cached_data(str(resolve_data_path()))
+    data_path = resolve_data_path()
+    df = get_cached_data(str(data_path) if data_path else "")
 
 st.sidebar.subheader("Workforce Filters")
 selected_depts = st.sidebar.multiselect(
