@@ -8,6 +8,9 @@ An interactive data analytics and workforce budgeting application built with **P
 - **Location & Role Level Matrix:** Interactive heatmap and regional spend comparison across offices and seniority levels.
 - **Budget What-If Simulator:** Models the net financial impact of annual salary increments, attrition reduction initiatives, overtime caps, and training investments.
 - **Custom CSV Support & Export:** Upload your own HR cost dataset or export filtered workforce reports directly to CSV.
+- **Deploy link of the project
+
+  https://hclhrcostanalysis-g2okamg954ymysxlu6shea.streamlit.app/
 
 ## Project Structure
 ```text
